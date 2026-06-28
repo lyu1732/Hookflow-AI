@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #07070a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: #07070a;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(37, 244, 238, 0.12), transparent 30rem),
+    radial-gradient(circle at right 16rem, rgba(255, 67, 101, 0.12), transparent 28rem),
+    #07070a;
+  color: #f7f7fb;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.studio-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.studio-scrollbar::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.studio-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+}
+
+.preview-zoom video {
+  transform: scale(1.045);
+  will-change: transform;
+}
+
+.preview-asmr video {
+  filter: saturate(1.25) contrast(1.08);
+}
+
+.preview-fast video {
+  transform: scale(1.025);
+  filter: contrast(1.16) brightness(1.08);
+  will-change: transform;
+}
+
+.preview-reverse video {
+  transform: scaleX(-1) scale(1.025);
+  filter: hue-rotate(12deg) contrast(1.12);
+  will-change: transform;
+}
+
+.preview-subtitle video {
+  filter: saturate(1.1) contrast(1.05);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
