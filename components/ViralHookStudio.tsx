@@ -192,6 +192,15 @@ const seekVideo = (video: HTMLVideoElement, time: number) =>
     video.currentTime = Math.max(0, Math.min(time, video.duration || time));
   });
 
+const getMontageTime = (elapsed: number, duration: number) => {
+  if (duration <= 1) return 0;
+  const cutIndex = Math.floor(elapsed / 0.35);
+  const cutOffset = (elapsed % 0.35) * 0.55;
+  const anchors = [0.18, 0.62, 0.35, 0.78, 0.48, 0.9, 0.25, 0.7];
+  const anchor = anchors[cutIndex % anchors.length] * duration;
+  return Math.max(0, Math.min(anchor + cutOffset, duration - 0.08));
+};
+
 const getFrameMetric = (context: CanvasRenderingContext2D, width: number, height: number): FrameMetric => {
   const { data } = context.getImageData(0, 0, width, height);
   let brightness = 0;
@@ -767,7 +776,7 @@ export default function ViralHookStudio() {
       if (isHookSegment) {
         if (effect === "zoom") scale = 1.04 + Math.min(time / 1.5, 1) * 0.05;
         if (effect === "pulse") scale = 1 + Math.sin(time * Math.PI * 3) * 0.018;
-        if (effect === "fast") scale = 1.035;
+        if (effect === "fast") scale = 1.065 + Math.sin(time * Math.PI * 8) * 0.012;
         scale = Math.max(scale, 1.1 + Math.sin(time * Math.PI * 4) * 0.025);
       }
 
@@ -1023,7 +1032,7 @@ export default function ViralHookStudio() {
         });
 
         await seekVideo(video, hookStart);
-        video.playbackRate = hook.type === "hook3" ? 1.25 : 1;
+        video.playbackRate = 1;
         drawFrame(context, video, width, height, mode, hook, true);
         canvasTrack?.requestFrame?.();
         recorder.start(500);
@@ -1039,12 +1048,13 @@ export default function ViralHookStudio() {
         let switchedToMain = false;
         let mainStartedAt = 0;
         let expectedFrameAt = performance.now();
+        let hook3LastCutIndex = -1;
         const render = async () => {
           if (!activeExportRef.current) return;
           const elapsed = (performance.now() - startedAt) / 1000;
           const isHookSegment = phase === "hook";
 
-          if (phase === "hook" && elapsed >= hookDuration && !switchedToMain) {
+          if (phase === "hook" && (elapsed >= hookDuration || video.ended) && !switchedToMain) {
             switchedToMain = true;
             phase = "main";
             video.pause();
@@ -1053,6 +1063,16 @@ export default function ViralHookStudio() {
             video.playbackRate = 1;
             mainStartedAt = performance.now();
             await video.play();
+          }
+
+          if (isHookSegment && hook.type === "hook3") {
+            const cutIndex = Math.floor(elapsed / 0.35);
+            if (cutIndex !== hook3LastCutIndex) {
+              hook3LastCutIndex = cutIndex;
+              video.pause();
+              await seekVideo(video, getMontageTime(elapsed, duration));
+              await video.play();
+            }
           }
 
           drawFrame(context, video, width, height, mode, hook, isHookSegment);
