@@ -750,6 +750,8 @@ export default function ViralHookStudio() {
         if (!context) throw new Error("Canvas 初始化失败");
 
         const canvasStream = canvas.captureStream(30);
+        const sourceStream = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
+        sourceStream?.getAudioTracks().forEach((track) => canvasStream.addTrack(track));
         const recorder = new MediaRecorder(canvasStream, {
           mimeType,
           videoBitsPerSecond: 1_500_000
@@ -764,12 +766,13 @@ export default function ViralHookStudio() {
           recorder.onerror = () => reject(new Error("浏览器录制失败"));
           recorder.onstop = () => {
             const blob = new Blob(chunks, { type: mimeType });
-            if (blob.size <= 1024) reject(new Error("导出文件异常，已阻止空文件下载"));
+            const minimumExpectedSize = Math.min(200_000, Math.max(20_000, duration * 5_000));
+            if (blob.size <= minimumExpectedSize) reject(new Error("导出文件过小，录制未完整完成"));
             else resolve(blob);
           };
         });
 
-        video.currentTime = selectedTemplate.exportEffect === "reverse" ? Math.max(0, duration - 0.1) : 0;
+        video.currentTime = 0;
         await video.play();
         recorder.start(250);
         appendLog(`导出参数：${width}x${height} / 30fps / ${mimeType}`);
@@ -779,21 +782,13 @@ export default function ViralHookStudio() {
         const render = () => {
           if (!activeExportRef.current) return;
           const elapsed = (performance.now() - startedAt) / 1000;
-          const sourceTime =
-            selectedTemplate.exportEffect === "reverse"
-              ? Math.max(0, duration - elapsed)
-              : Math.min(duration, elapsed);
-
-          if (Number.isFinite(sourceTime) && Math.abs(video.currentTime - sourceTime) > 0.06) {
-            video.currentTime = sourceTime;
-          }
 
           drawFrame(context, video, width, height, mode);
-          const percent = Math.min(98, Math.round((elapsed / duration) * 100));
+          const percent = Math.min(98, Math.round((video.currentTime / duration) * 100));
           setProgress(percent);
           setStatus(`正在轻量导出：${percent}%`);
 
-          if (elapsed >= duration) {
+          if (video.ended || video.currentTime >= duration - 0.05 || elapsed >= duration + 1.5) {
             recorder.stop();
             video.pause();
             return;
@@ -934,12 +929,13 @@ export default function ViralHookStudio() {
                 {videoUrl ? (
                   <>
                     <video
+                      key={videoUrl}
                       className="h-full w-full object-contain"
                       src={videoUrl}
                       controls
-                      loop
                       playsInline
-                      preload="metadata"
+                      preload="auto"
+                      onEnded={() => setStatus("视频已完整播放完毕。")}
                     />
                     {selectedTemplate.id === "subtitle" ? (
                       <div className="pointer-events-none absolute left-1/2 top-[12%] -translate-x-1/2 whitespace-nowrap rounded-md bg-black/55 px-5 py-2 text-center text-2xl font-black text-white sm:text-4xl">
