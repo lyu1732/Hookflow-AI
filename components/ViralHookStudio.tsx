@@ -38,6 +38,7 @@ type HookVariant = {
   score: number;
   previewClass: string;
   exportEffect: "pulse" | "zoom" | "fast";
+  previewUrl?: string;
 };
 
 type ExportResult = {
@@ -405,9 +406,11 @@ const HookResultsDashboard = memo(function HookResultsDashboard({
               <div className={`relative aspect-[9/14] max-h-[24rem] overflow-hidden bg-black ${hook.previewClass}`}>
                 <video
                   className="h-full w-full object-cover"
-                  src={videoUrl}
+                  src={hook.previewUrl ?? videoUrl}
                   muted
                   playsInline
+                  controls
+                  loop
                   preload="metadata"
                 />
                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/60 to-transparent p-4">
@@ -598,8 +601,11 @@ export default function ViralHookStudio() {
     return () => {
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       if (exportResult?.url) URL.revokeObjectURL(exportResult.url);
+      generatedHooks.forEach((hook) => {
+        if (hook.previewUrl) URL.revokeObjectURL(hook.previewUrl);
+      });
     };
-  }, [videoUrl, exportResult?.url]);
+  }, [videoUrl, exportResult?.url, generatedHooks]);
 
   const onFileChange = useCallback(
     async (file: File | null) => {
@@ -621,6 +627,9 @@ export default function ViralHookStudio() {
 
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       if (exportResult?.url) URL.revokeObjectURL(exportResult.url);
+      generatedHooks.forEach((hook) => {
+        if (hook.previewUrl) URL.revokeObjectURL(hook.previewUrl);
+      });
 
       const nextVideoUrl = URL.createObjectURL(file);
       setVideoFile(file);
@@ -667,6 +676,11 @@ export default function ViralHookStudio() {
         });
         setGeneratedHooks(nextHooks);
         setSelectedHookTypes(nextHooks.map((hook) => hook.type));
+        setStatus("正在生成 3 个 Hook 预览...");
+        const hooksWithPreview = await Promise.all(
+          nextHooks.map((hook) => generateHookPreview(nextVideoUrl, hook))
+        );
+        setGeneratedHooks(hooksWithPreview);
         setStatus(
           data.source === "gemini"
             ? "Gemini 已完成内容理解和增长建议。"
@@ -677,7 +691,11 @@ export default function ViralHookStudio() {
         const fallbackAnalysis = generateAnalysis(null);
         setAnalysis(fallbackAnalysis);
         setCopyPack(generateCopyPack(fallbackAnalysis));
-        setGeneratedHooks(hookVariants);
+        setStatus("正在生成 3 个 Hook 预览...");
+        const hooksWithPreview = await Promise.all(
+          hookVariants.map((hook) => generateHookPreview(nextVideoUrl, hook))
+        );
+        setGeneratedHooks(hooksWithPreview);
         setSelectedHookTypes(hookVariants.map((hook) => hook.type));
         setStatus("AI 分析超时，已生成 3 个本地 Hook 版本。");
         appendLog("AI 分析超时，使用客户端快速兜底");
@@ -685,7 +703,7 @@ export default function ViralHookStudio() {
         setIsAnalyzing(false);
       }
     },
-    [appendLog, exportResult?.url, showToast, videoUrl]
+    [appendLog, exportResult?.url, generatedHooks, showToast, videoUrl]
   );
 
   const drawFrame = useCallback(
@@ -785,6 +803,93 @@ export default function ViralHookStudio() {
       context.restore();
     },
     []
+  );
+
+  const generateHookPreview = useCallback(
+    async (sourceUrl: string, hook: HookVariant) => {
+      const mimeType = getSupportedRecorder();
+      if (!mimeType) return hook;
+
+      const video = document.createElement("video");
+      const canvas = document.createElement("canvas");
+      let animationId = 0;
+
+      try {
+        video.src = sourceUrl;
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = "auto";
+        await waitForVideoReady(video);
+
+        const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 8;
+        const previewDuration = Math.min(3.5, Math.max(2.5, duration * 0.22));
+        const hookStart =
+          duration <= previewDuration + 1
+            ? 0
+            : hook.type === "hook2"
+              ? Math.max(0, duration - previewDuration - 0.4)
+              : hook.type === "hook1"
+                ? Math.max(0, duration * 0.55 - previewDuration / 2)
+                : Math.max(0, duration * 0.35 - previewDuration / 2);
+        const sourceWidth = video.videoWidth || 720;
+        const sourceHeight = video.videoHeight || 1280;
+        const maxLongSide = 420;
+        const scale = Math.min(1, maxLongSide / Math.max(sourceWidth, sourceHeight));
+        const width = Math.max(2, Math.round((sourceWidth * scale) / 2) * 2);
+        const height = Math.max(2, Math.round((sourceHeight * scale) / 2) * 2);
+        canvas.width = width;
+        canvas.height = height;
+
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) return hook;
+
+        const stream = canvas.captureStream(24);
+        const recorder = new MediaRecorder(stream, {
+          mimeType,
+          videoBitsPerSecond: 900_000
+        });
+        const chunks: BlobPart[] = [];
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) chunks.push(event.data);
+        };
+
+        const finished = new Promise<Blob>((resolve, reject) => {
+          recorder.onerror = () => reject(new Error("预览生成失败"));
+          recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
+        });
+
+        video.currentTime = hookStart;
+        await video.play();
+        recorder.start(250);
+
+        const startedAt = performance.now();
+        const render = () => {
+          const elapsed = (performance.now() - startedAt) / 1000;
+          drawFrame(context, video, width, height, "rewarded", hook, true);
+
+          if (elapsed >= previewDuration || video.ended) {
+            recorder.stop();
+            video.pause();
+            return;
+          }
+
+          animationId = window.requestAnimationFrame(render);
+        };
+
+        animationId = window.requestAnimationFrame(render);
+        const blob = await finished;
+        if (blob.size <= 1024) return hook;
+        return { ...hook, previewUrl: URL.createObjectURL(blob) };
+      } catch {
+        return hook;
+      } finally {
+        window.cancelAnimationFrame(animationId);
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+    },
+    [drawFrame]
   );
 
   const runCanvasExport = useCallback(
