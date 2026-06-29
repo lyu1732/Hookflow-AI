@@ -736,7 +736,7 @@ export default function ViralHookStudio() {
         video.preload = "auto";
         await waitForVideoReady(video);
 
-        const duration = Math.min(video.duration || 8, 12);
+        const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 8;
         const sourceWidth = video.videoWidth || 720;
         const sourceHeight = video.videoHeight || 1280;
         const maxLongSide = 720;
@@ -773,6 +773,7 @@ export default function ViralHookStudio() {
         await video.play();
         recorder.start(250);
         appendLog(`导出参数：${width}x${height} / 30fps / ${mimeType}`);
+        appendLog(`完整视频导出：约 ${Math.ceil(duration)} 秒`);
 
         const startedAt = performance.now();
         const render = () => {
@@ -781,7 +782,7 @@ export default function ViralHookStudio() {
           const sourceTime =
             selectedTemplate.exportEffect === "reverse"
               ? Math.max(0, duration - elapsed)
-              : Math.min(duration, elapsed * (selectedTemplate.exportEffect === "fast" ? 1.18 : 1));
+              : Math.min(duration, elapsed);
 
           if (Number.isFinite(sourceTime) && Math.abs(video.currentTime - sourceTime) > 0.06) {
             video.currentTime = sourceTime;
