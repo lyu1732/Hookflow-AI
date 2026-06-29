@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 5;
+export const maxDuration = 15;
 
 type FrameMetric = {
   brightness: number;
@@ -184,54 +184,71 @@ const parseGeminiJson = (text: string) => {
   return JSON.parse(cleaned.slice(start, end + 1));
 };
 
+const getErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  return "未知错误";
+};
+
 export async function POST(request: Request) {
   const payload = (await request.json()) as AnalyzeRequest;
-  const fallback = () => NextResponse.json(localFallback(payload));
+  const fallback = (reason: string) => {
+    console.error(`[HookFlow AI] Gemini fallback: ${reason}`);
+    return NextResponse.json({
+      ...localFallback(payload),
+      fallbackReason: reason
+    });
+  };
 
-  if (!process.env.GEMINI_API_KEY) return fallback();
+  if (!process.env.GEMINI_API_KEY) return fallback("服务端没有读取到 GEMINI_API_KEY");
 
   try {
+    const model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      "https://generativelanguage.googleapis.com/v1beta/interactions",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(3600),
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": process.env.GEMINI_API_KEY
+        },
+        signal: AbortSignal.timeout(9500),
         body: JSON.stringify({
-          contents: [
+          model,
+          input: [
             {
-              role: "user",
-              parts: [
-                { text: prompt },
-                {
-                  text: JSON.stringify({
-                    template: payload.template,
-                    duration: payload.duration,
-                    aspectRatio: payload.aspectRatio,
-                    frameMetrics: payload.metrics
-                  })
-                },
-                ...payload.frames.slice(0, 3).map((frame) => ({
-                  inlineData: {
-                    mimeType: "image/jpeg",
-                    data: frame
-                  }
-                }))
-              ]
-            }
+              type: "text",
+              text: `${prompt}\n\nVideo metadata:\n${JSON.stringify({
+                template: payload.template,
+                duration: payload.duration,
+                aspectRatio: payload.aspectRatio,
+                frameMetrics: payload.metrics
+              })}`
+            },
+            ...payload.frames.slice(0, 3).map((frame) => ({
+              type: "image",
+              data: frame,
+              mime_type: "image/jpeg"
+            }))
           ],
-          generationConfig: {
+          response_format: {
+            type: "text",
+            mime_type: "application/json"
+          },
+          generation_config: {
             temperature: 0.35,
-            maxOutputTokens: 900,
-            responseMimeType: "application/json"
+            max_output_tokens: 900,
+            thinking_level: "minimal"
           }
         })
       }
     );
 
-    if (!response.ok) throw new Error(`Gemini error ${response.status}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini ${response.status}: ${errorText.slice(0, 240)}`);
+    }
     const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = data?.output_text ?? data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("Gemini returned empty content");
 
     const parsed = parseGeminiJson(text);
@@ -243,7 +260,7 @@ export async function POST(request: Request) {
       hooks: Array.isArray(parsed.hooks) && parsed.hooks.length >= 3 ? parsed.hooks : fallbackData.hooks,
       source: "gemini"
     });
-  } catch {
-    return fallback();
+  } catch (error) {
+    return fallback(getErrorMessage(error));
   }
 }

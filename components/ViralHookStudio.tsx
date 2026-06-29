@@ -87,6 +87,7 @@ type AnalyzeResponse = {
     score?: number;
   }>;
   source: "gemini" | "local-fallback";
+  fallbackReason?: string;
 };
 
 type AnalysisSource = "gemini" | "local-fallback" | "pending";
@@ -468,12 +469,14 @@ const AnalysisDashboard = memo(function AnalysisDashboard({
   analysis,
   copyPack,
   isAnalyzing,
-  source
+  source,
+  fallbackReason
 }: {
   analysis: Analysis;
   copyPack: CopyPack;
   isAnalyzing: boolean;
   source: AnalysisSource;
+  fallbackReason: string;
 }) {
   const sourceLabel =
     source === "gemini" ? "Gemini Vision" : source === "pending" ? "分析中" : "本地模拟分析";
@@ -488,6 +491,9 @@ const AnalysisDashboard = memo(function AnalysisDashboard({
             </p>
             <h2 className="mt-1 text-xl font-black">Creator Growth Diagnosis</h2>
             <p className="mt-2 text-xs font-semibold text-white/48">分析来源：{sourceLabel}</p>
+            {source === "local-fallback" && fallbackReason ? (
+              <p className="mt-1 max-w-xl text-xs font-medium text-coral/80">Gemini 未启用原因：{fallbackReason}</p>
+            ) : null}
           </div>
           {isAnalyzing ? <LoaderCircle className="animate-spin text-cyan" size={24} /> : <Target className="text-cyan" size={24} />}
         </div>
@@ -587,11 +593,15 @@ export default function ViralHookStudio() {
   const [toast, setToast] = useState<{ type: ToastType; message: string } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisSource, setAnalysisSource] = useState<AnalysisSource>("local-fallback");
+  const [analysisFallbackReason, setAnalysisFallbackReason] = useState("");
   const [analysis, setAnalysis] = useState<Analysis>(() => generateAnalysis(null));
   const [copyPack, setCopyPack] = useState<CopyPack>(() => generateCopyPack(generateAnalysis(null)));
   const [generatedHooks, setGeneratedHooks] = useState<HookVariant[]>([]);
   const [selectedHookTypes, setSelectedHookTypes] = useState<HookVariant["type"][]>([]);
   const [pendingExportHooks, setPendingExportHooks] = useState<HookVariant[]>([]);
+  const videoUrlRef = useRef("");
+  const exportResultUrlRef = useRef("");
+  const hookPreviewUrlsRef = useRef<string[]>([]);
 
   const appendLog = useCallback((message: string) => {
     const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -607,14 +617,24 @@ export default function ViralHookStudio() {
   }, []);
 
   useEffect(() => {
+    videoUrlRef.current = videoUrl;
+  }, [videoUrl]);
+
+  useEffect(() => {
+    exportResultUrlRef.current = exportResult?.url ?? "";
+  }, [exportResult?.url]);
+
+  useEffect(() => {
+    hookPreviewUrlsRef.current = generatedHooks.flatMap((hook) => hook.previewUrl ? [hook.previewUrl] : []);
+  }, [generatedHooks]);
+
+  useEffect(() => {
     return () => {
-      if (videoUrl) URL.revokeObjectURL(videoUrl);
-      if (exportResult?.url) URL.revokeObjectURL(exportResult.url);
-      generatedHooks.forEach((hook) => {
-        if (hook.previewUrl) URL.revokeObjectURL(hook.previewUrl);
-      });
+      if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
+      if (exportResultUrlRef.current) URL.revokeObjectURL(exportResultUrlRef.current);
+      hookPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [videoUrl, exportResult?.url, generatedHooks]);
+  }, []);
 
   const onFileChange = useCallback(
     async (file: File | null) => {
@@ -651,6 +671,7 @@ export default function ViralHookStudio() {
       setExportLogs([]);
       setIsAnalyzing(true);
       setAnalysisSource("pending");
+      setAnalysisFallbackReason("");
       setStatus("AI正在分析视频内容...");
       appendLog(`素材已加载：${file.name}，${formatSize(file.size)}`);
 
@@ -659,7 +680,7 @@ export default function ViralHookStudio() {
         appendLog("已抽取开头 / 中间 / 结尾三帧，并压缩到 400px 内");
 
         const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), 4800);
+        const timeout = window.setTimeout(() => controller.abort(), 12000);
         const response = await fetch("/api/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -676,6 +697,7 @@ export default function ViralHookStudio() {
         setAnalysis(data.analysis);
         setCopyPack(data.copyPack);
         setAnalysisSource(data.source);
+        setAnalysisFallbackReason(data.fallbackReason ?? "");
         const hookMap = new Map(data.hooks?.map((hook) => [hook.type, hook]));
         const nextHooks = hookVariants.map((hook) => {
           const apiHook = hookMap.get(hook.type);
@@ -698,11 +720,13 @@ export default function ViralHookStudio() {
             : "已生成 3 个 Hook 版本，请选择导出。"
         );
         appendLog(data.source === "gemini" ? "Gemini Vision 分析完成" : "本地 fallback 分析完成");
+        if (data.fallbackReason) appendLog(`Gemini 未启用原因：${data.fallbackReason}`);
       } catch {
         const fallbackAnalysis = generateAnalysis(null);
         setAnalysis(fallbackAnalysis);
         setCopyPack(generateCopyPack(fallbackAnalysis));
         setAnalysisSource("local-fallback");
+        setAnalysisFallbackReason("前端等待 AI 分析超时或接口请求失败");
         setStatus("正在生成 3 个 Hook 预览...");
         const hooksWithPreview = await Promise.all(
           hookVariants.map((hook) => generateHookPreview(nextVideoUrl, hook))
@@ -910,17 +934,21 @@ export default function ViralHookStudio() {
       const video = document.createElement("video");
       const canvas = document.createElement("canvas");
       let animationId = 0;
+      let exportSourceUrl = "";
 
       try {
         appendLog("使用 Canvas + MediaRecorder 轻量导出");
         appendLog("跳过 FFmpeg WASM 全量转码，优先保证秒级体验");
         appendLog(`正在导出：${hook.displayName}`);
 
-        video.src = videoUrl;
         video.muted = true;
         video.playsInline = true;
         video.preload = "auto";
+        exportSourceUrl = URL.createObjectURL(videoFile);
+        video.src = exportSourceUrl;
+        video.load();
         await waitForVideoReady(video);
+        appendLog(`视频读取成功：${video.videoWidth}x${video.videoHeight} / ${video.duration.toFixed(1)} 秒`);
 
         const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 8;
         const hookDuration = Math.min(5, Math.max(3, duration * 0.28));
@@ -1043,6 +1071,7 @@ export default function ViralHookStudio() {
         video.pause();
         video.removeAttribute("src");
         video.load();
+        if (exportSourceUrl) URL.revokeObjectURL(exportSourceUrl);
         activeExportRef.current = false;
         setIsExporting(false);
       }
@@ -1276,7 +1305,13 @@ export default function ViralHookStudio() {
           onExportSelected={exportSelectedHooks}
         />
 
-        <AnalysisDashboard analysis={analysis} copyPack={copyPack} isAnalyzing={isAnalyzing} source={analysisSource} />
+        <AnalysisDashboard
+          analysis={analysis}
+          copyPack={copyPack}
+          isAnalyzing={isAnalyzing}
+          source={analysisSource}
+          fallbackReason={analysisFallbackReason}
+        />
 
         <section className="grid gap-5 lg:grid-cols-[1fr_23rem]">
           <div className="rounded-lg border border-line bg-white/[0.04] p-4 text-sm text-white/62">
