@@ -935,13 +935,15 @@ export default function ViralHookStudio() {
       const canvas = document.createElement("canvas");
       let animationId = 0;
       let exportSourceUrl = "";
+      let audioContext: AudioContext | null = null;
 
       try {
         appendLog("使用 Canvas + MediaRecorder 轻量导出");
         appendLog("跳过 FFmpeg WASM 全量转码，优先保证秒级体验");
         appendLog(`正在导出：${hook.displayName}`);
 
-        video.muted = true;
+        video.muted = false;
+        video.volume = 1;
         video.playsInline = true;
         video.preload = "auto";
         exportSourceUrl = URL.createObjectURL(videoFile);
@@ -963,7 +965,7 @@ export default function ViralHookStudio() {
         const outputDuration = duration + hookDuration;
         const sourceWidth = video.videoWidth || 720;
         const sourceHeight = video.videoHeight || 1280;
-        const maxLongSide = 720;
+        const maxLongSide = 540;
         const scale = Math.min(1, maxLongSide / Math.max(sourceWidth, sourceHeight));
         const width = Math.max(2, Math.round((sourceWidth * scale) / 2) * 2);
         const height = Math.max(2, Math.round((sourceHeight * scale) / 2) * 2);
@@ -973,10 +975,29 @@ export default function ViralHookStudio() {
         const context = canvas.getContext("2d", { alpha: false });
         if (!context) throw new Error("Canvas 初始化失败");
 
-        const canvasStream = canvas.captureStream(30);
+        const exportFps = 24;
+        const canvasStream = canvas.captureStream(exportFps);
+        try {
+          const AudioContextClass =
+            window.AudioContext ?? (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (AudioContextClass) {
+            audioContext = new AudioContextClass();
+            const audioSource = audioContext.createMediaElementSource(video);
+            const audioDestination = audioContext.createMediaStreamDestination();
+            audioSource.connect(audioDestination);
+            audioDestination.stream.getAudioTracks().forEach((track) => canvasStream.addTrack(track));
+            await audioContext.resume();
+            appendLog("已合并原视频音频轨道");
+          } else {
+            appendLog("当前浏览器不支持音频混流，导出将不包含声音");
+          }
+        } catch (audioError) {
+          appendLog(`音频混流失败：${audioError instanceof Error ? audioError.message : "未知错误"}`);
+        }
+
         const recorder = new MediaRecorder(canvasStream, {
           mimeType,
-          videoBitsPerSecond: 1_500_000
+          videoBitsPerSecond: 1_100_000
         });
         const chunks: BlobPart[] = [];
 
@@ -994,15 +1015,20 @@ export default function ViralHookStudio() {
           };
         });
 
-        video.currentTime = hookStart;
+        await seekVideo(video, hookStart);
+        video.playbackRate = hook.type === "hook3" ? 1.25 : 1;
+        drawFrame(context, video, width, height, mode, hook, true);
+        recorder.start(500);
         await video.play();
-        recorder.start(250);
-        appendLog(`导出参数：${width}x${height} / 30fps / ${mimeType}`);
-        appendLog(`重剪结构：先插入 ${hookDuration.toFixed(1)} 秒高冲击 hook，再接完整原片`);
+        appendLog(`导出参数：${width}x${height} / ${exportFps}fps / ${mimeType}`);
+        appendLog(`Hook 取材位置：原视频 ${hookStart.toFixed(1)} 秒附近`);
+        appendLog(`重剪结构：前 ${hookDuration.toFixed(1)} 秒为重构 hook，随后从 0 秒接回完整原片`);
 
         const startedAt = performance.now();
+        let lastProgressAt = 0;
         let phase: "hook" | "main" = "hook";
         let switchedToMain = false;
+        let mainStartedAt = 0;
         const render = async () => {
           if (!activeExportRef.current) return;
           const elapsed = (performance.now() - startedAt) / 1000;
@@ -1012,17 +1038,31 @@ export default function ViralHookStudio() {
             switchedToMain = true;
             phase = "main";
             video.pause();
-            await seekVideo(video, 0).catch(() => undefined);
-            await video.play().catch(() => undefined);
+            appendLog("Hook 段完成，正在接回原视频 0 秒");
+            await seekVideo(video, 0);
+            video.playbackRate = 1;
+            mainStartedAt = performance.now();
+            await video.play();
           }
 
           drawFrame(context, video, width, height, mode, hook, isHookSegment);
-          const mainElapsed = phase === "hook" ? 0 : video.currentTime;
-          const percent = Math.min(98, Math.round(((Math.min(elapsed, hookDuration) + mainElapsed) / outputDuration) * 100));
-          setProgress(percent);
-          setStatus(phase === "hook" ? `正在生成高冲击开场：${percent}%` : `正在导出完整视频：${percent}%`);
+          const mainElapsed = phase === "hook" ? 0 : Math.min(duration, video.currentTime);
+          const exportedElapsed = Math.min(elapsed, hookDuration) + mainElapsed;
+          const percent = Math.min(98, Math.round((exportedElapsed / outputDuration) * 100));
+          if (performance.now() - lastProgressAt > 300) {
+            lastProgressAt = performance.now();
+            setProgress(percent);
+            setStatus(phase === "hook" ? `正在生成高冲击开场：${percent}%` : `正在导出完整视频：${percent}%`);
+          }
 
-          if (phase === "main" && (video.ended || video.currentTime >= duration - 0.05 || elapsed >= outputDuration + 1.5)) {
+          const mainWallClockElapsed = mainStartedAt ? (performance.now() - mainStartedAt) / 1000 : 0;
+          const mainIsComplete = phase === "main" && (video.ended || video.currentTime >= duration - 0.08);
+          const mainTimedOut = phase === "main" && mainWallClockElapsed >= duration + 5;
+          if (
+            (mainIsComplete || mainTimedOut) &&
+            recorder.state === "recording"
+          ) {
+            appendLog(mainIsComplete ? "完整原片已接入导出" : "原片导出达到安全时长，正在收尾");
             recorder.stop();
             video.pause();
             return;
@@ -1071,6 +1111,7 @@ export default function ViralHookStudio() {
         video.pause();
         video.removeAttribute("src");
         video.load();
+        audioContext?.close().catch(() => undefined);
         if (exportSourceUrl) URL.revokeObjectURL(exportSourceUrl);
         activeExportRef.current = false;
         setIsExporting(false);

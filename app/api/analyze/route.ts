@@ -184,9 +184,137 @@ const parseGeminiJson = (text: string) => {
   return JSON.parse(cleaned.slice(start, end + 1));
 };
 
+const extractGeminiText = (data: unknown) => {
+  const candidates: string[] = [];
+
+  const collect = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    const directText = record.text;
+    if (typeof directText === "string" && directText.trim()) candidates.push(directText);
+
+    const outputText = record.output_text ?? record.outputText;
+    if (typeof outputText === "string" && outputText.trim()) candidates.push(outputText);
+
+    Object.values(record).forEach(collect);
+  };
+
+  collect(data);
+  return candidates
+    .sort((a, b) => {
+      const aHasJson = a.includes("{") && a.includes("}");
+      const bHasJson = b.includes("{") && b.includes("}");
+      if (aHasJson !== bHasJson) return aHasJson ? -1 : 1;
+      return b.length - a.length;
+    })[0];
+};
+
 const getErrorMessage = (error: unknown) => {
   if (error instanceof Error) return error.message;
   return "未知错误";
+};
+
+const buildMetadataPrompt = (payload: AnalyzeRequest) =>
+  `${prompt}\n\nVideo metadata:\n${JSON.stringify({
+    template: payload.template,
+    duration: payload.duration,
+    aspectRatio: payload.aspectRatio,
+    frameMetrics: payload.metrics
+  })}`;
+
+const requestGeminiInteractions = async (payload: AnalyzeRequest, apiKey: string, model: string) => {
+  const response = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      signal: AbortSignal.timeout(9500),
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            type: "text",
+            text: buildMetadataPrompt(payload)
+          },
+          ...payload.frames.slice(0, 3).map((frame) => ({
+            type: "image",
+            data: frame,
+            mime_type: "image/jpeg"
+          }))
+        ],
+        response_format: {
+          type: "text",
+          mime_type: "application/json"
+        },
+        generation_config: {
+          temperature: 0.35,
+          max_output_tokens: 900,
+          thinking_level: "minimal"
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Interactions ${response.status}: ${errorText.slice(0, 240)}`);
+  }
+
+  const data = await response.json();
+  const text = extractGeminiText(data);
+  if (!text) throw new Error("Interactions returned no text");
+  return text;
+};
+
+const requestGeminiGenerateContent = async (payload: AnalyzeRequest, apiKey: string) => {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(9500),
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: buildMetadataPrompt(payload) },
+              ...payload.frames.slice(0, 3).map((frame) => ({
+                inlineData: {
+                  mimeType: "image/jpeg",
+                  data: frame
+                }
+              }))
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.35,
+          maxOutputTokens: 900,
+          responseMimeType: "application/json"
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`generateContent ${response.status}: ${errorText.slice(0, 240)}`);
+  }
+
+  const data = await response.json();
+  const text = extractGeminiText(data);
+  if (!text) throw new Error("generateContent returned no text");
+  return text;
 };
 
 export async function POST(request: Request) {
@@ -199,57 +327,19 @@ export async function POST(request: Request) {
     });
   };
 
-  if (!process.env.GEMINI_API_KEY) return fallback("服务端没有读取到 GEMINI_API_KEY");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return fallback("服务端没有读取到 GEMINI_API_KEY");
 
   try {
     const model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
-    const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/interactions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": process.env.GEMINI_API_KEY
-        },
-        signal: AbortSignal.timeout(9500),
-        body: JSON.stringify({
-          model,
-          input: [
-            {
-              type: "text",
-              text: `${prompt}\n\nVideo metadata:\n${JSON.stringify({
-                template: payload.template,
-                duration: payload.duration,
-                aspectRatio: payload.aspectRatio,
-                frameMetrics: payload.metrics
-              })}`
-            },
-            ...payload.frames.slice(0, 3).map((frame) => ({
-              type: "image",
-              data: frame,
-              mime_type: "image/jpeg"
-            }))
-          ],
-          response_format: {
-            type: "text",
-            mime_type: "application/json"
-          },
-          generation_config: {
-            temperature: 0.35,
-            max_output_tokens: 900,
-            thinking_level: "minimal"
-          }
-        })
-      }
-    );
+    let text = "";
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Gemini ${response.status}: ${errorText.slice(0, 240)}`);
+    try {
+      text = await requestGeminiInteractions(payload, apiKey, model);
+    } catch (interactionsError) {
+      console.error(`[HookFlow AI] Interactions failed, retrying generateContent: ${getErrorMessage(interactionsError)}`);
+      text = await requestGeminiGenerateContent(payload, apiKey);
     }
-    const data = await response.json();
-    const text = data?.output_text ?? data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("Gemini returned empty content");
 
     const parsed = parseGeminiJson(text);
     if (!parsed?.analysis || !parsed?.copyPack) throw new Error("Gemini returned invalid schema");
