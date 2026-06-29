@@ -23,6 +23,9 @@ const prompt = `You are a Senior TikTok and Meta Growth Strategist.
 
 Analyze the uploaded video frames.
 
+Use visible evidence from the frames. Mention concrete visual clues such as people, objects, scene, motion context, colors, composition, product type, food, screen content, performance style, or environment when they are visible.
+Do not return generic creator advice when the frames contain recognizable content.
+
 Infer:
 
 * video category
@@ -209,8 +212,8 @@ export async function POST(request: Request) {
                   })
                 },
                 ...payload.frames.slice(0, 3).map((frame) => ({
-                  inline_data: {
-                    mime_type: "image/jpeg",
+                  inlineData: {
+                    mimeType: "image/jpeg",
                     data: frame
                   }
                 }))
@@ -220,7 +223,7 @@ export async function POST(request: Request) {
           generationConfig: {
             temperature: 0.35,
             maxOutputTokens: 900,
-            response_mime_type: "application/json"
+            responseMimeType: "application/json"
           }
         })
       }

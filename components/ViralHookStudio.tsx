@@ -89,6 +89,8 @@ type AnalyzeResponse = {
   source: "gemini" | "local-fallback";
 };
 
+type AnalysisSource = "gemini" | "local-fallback" | "pending";
+
 const hookVariants: HookVariant[] = [
   {
     type: "hook1",
@@ -130,10 +132,10 @@ const formatSize = (bytes: number) => {
 
 const getSupportedRecorder = () => {
   const candidates = [
-    "video/mp4;codecs=h264,aac",
     "video/webm;codecs=vp9,opus",
     "video/webm;codecs=vp8,opus",
-    "video/webm"
+    "video/webm",
+    "video/mp4;codecs=h264,aac"
   ];
 
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
@@ -465,12 +467,17 @@ const HookResultsDashboard = memo(function HookResultsDashboard({
 const AnalysisDashboard = memo(function AnalysisDashboard({
   analysis,
   copyPack,
-  isAnalyzing
+  isAnalyzing,
+  source
 }: {
   analysis: Analysis;
   copyPack: CopyPack;
   isAnalyzing: boolean;
+  source: AnalysisSource;
 }) {
+  const sourceLabel =
+    source === "gemini" ? "Gemini Vision" : source === "pending" ? "分析中" : "本地模拟分析";
+
   return (
     <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
       <div className="rounded-lg border border-line bg-panel/88 p-5 shadow-lift">
@@ -480,6 +487,7 @@ const AnalysisDashboard = memo(function AnalysisDashboard({
               AI推荐分析
             </p>
             <h2 className="mt-1 text-xl font-black">Creator Growth Diagnosis</h2>
+            <p className="mt-2 text-xs font-semibold text-white/48">分析来源：{sourceLabel}</p>
           </div>
           {isAnalyzing ? <LoaderCircle className="animate-spin text-cyan" size={24} /> : <Target className="text-cyan" size={24} />}
         </div>
@@ -578,6 +586,7 @@ export default function ViralHookStudio() {
   const [adCount, setAdCount] = useState(15);
   const [toast, setToast] = useState<{ type: ToastType; message: string } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisSource, setAnalysisSource] = useState<AnalysisSource>("local-fallback");
   const [analysis, setAnalysis] = useState<Analysis>(() => generateAnalysis(null));
   const [copyPack, setCopyPack] = useState<CopyPack>(() => generateCopyPack(generateAnalysis(null)));
   const [generatedHooks, setGeneratedHooks] = useState<HookVariant[]>([]);
@@ -641,6 +650,7 @@ export default function ViralHookStudio() {
       setProgress(0);
       setExportLogs([]);
       setIsAnalyzing(true);
+      setAnalysisSource("pending");
       setStatus("AI正在分析视频内容...");
       appendLog(`素材已加载：${file.name}，${formatSize(file.size)}`);
 
@@ -665,6 +675,7 @@ export default function ViralHookStudio() {
         const data = (await response.json()) as AnalyzeResponse;
         setAnalysis(data.analysis);
         setCopyPack(data.copyPack);
+        setAnalysisSource(data.source);
         const hookMap = new Map(data.hooks?.map((hook) => [hook.type, hook]));
         const nextHooks = hookVariants.map((hook) => {
           const apiHook = hookMap.get(hook.type);
@@ -691,6 +702,7 @@ export default function ViralHookStudio() {
         const fallbackAnalysis = generateAnalysis(null);
         setAnalysis(fallbackAnalysis);
         setCopyPack(generateCopyPack(fallbackAnalysis));
+        setAnalysisSource("local-fallback");
         setStatus("正在生成 3 个 Hook 预览...");
         const hooksWithPreview = await Promise.all(
           hookVariants.map((hook) => generateHookPreview(nextVideoUrl, hook))
@@ -764,24 +776,8 @@ export default function ViralHookStudio() {
         context.fillStyle = gradient;
         context.fillRect(0, 0, width, height);
 
-        context.fillStyle = "rgba(0,0,0,0.72)";
-        context.fillRect(0, 0, width, 74);
-        context.fillRect(0, height - 96, width, 96);
-
-        context.textAlign = "center";
-        context.fillStyle = "#ffffff";
-        context.font = "900 44px Arial, Helvetica, sans-serif";
-        context.fillText(
-          hook.displayName === "Hook 2" ? "先看结果" : hook.displayName === "Hook 1" ? "高能瞬间" : "别从开头看",
-          width / 2,
-          height - 52
-        );
-        context.font = "700 22px Arial, Helvetica, sans-serif";
-        context.fillStyle = "rgba(37,244,238,0.96)";
-        context.fillText("NEW HOOK 0-5S", width / 2, 48);
-
-        context.strokeStyle = time % 0.35 < 0.18 ? "rgba(255,67,101,0.92)" : "rgba(37,244,238,0.88)";
-        context.lineWidth = 8;
+        context.strokeStyle = "rgba(255,255,255,0.16)";
+        context.lineWidth = 3;
         context.strokeRect(10, 10, width - 20, height - 20);
       }
 
@@ -950,8 +946,6 @@ export default function ViralHookStudio() {
         if (!context) throw new Error("Canvas 初始化失败");
 
         const canvasStream = canvas.captureStream(30);
-        const sourceStream = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
-        sourceStream?.getAudioTracks().forEach((track) => canvasStream.addTrack(track));
         const recorder = new MediaRecorder(canvasStream, {
           mimeType,
           videoBitsPerSecond: 1_500_000
@@ -966,7 +960,7 @@ export default function ViralHookStudio() {
           recorder.onerror = () => reject(new Error("浏览器录制失败"));
           recorder.onstop = () => {
             const blob = new Blob(chunks, { type: mimeType });
-            const minimumExpectedSize = Math.min(240_000, Math.max(28_000, outputDuration * 5_000));
+            const minimumExpectedSize = Math.min(80_000, Math.max(12_000, outputDuration * 2_000));
             if (blob.size <= minimumExpectedSize) reject(new Error("导出文件过小，录制未完整完成"));
             else resolve(blob);
           };
@@ -981,7 +975,7 @@ export default function ViralHookStudio() {
         const startedAt = performance.now();
         let phase: "hook" | "main" = "hook";
         let switchedToMain = false;
-        const render = () => {
+        const render = async () => {
           if (!activeExportRef.current) return;
           const elapsed = (performance.now() - startedAt) / 1000;
           const isHookSegment = phase === "hook";
@@ -990,8 +984,8 @@ export default function ViralHookStudio() {
             switchedToMain = true;
             phase = "main";
             video.pause();
-            video.currentTime = 0;
-            video.play().catch(() => undefined);
+            await seekVideo(video, 0).catch(() => undefined);
+            await video.play().catch(() => undefined);
           }
 
           drawFrame(context, video, width, height, mode, hook, isHookSegment);
@@ -1042,8 +1036,8 @@ export default function ViralHookStudio() {
       } catch (error) {
         const message = error instanceof Error ? error.message : "未知错误";
         appendLog(`导出失败：${message}`);
-        setStatus("导出失败，请换一段较短视频或使用 Chrome / Edge 浏览器。");
-        showToast("error", "导出失败，未生成异常文件");
+        setStatus(`导出失败：${message}`);
+        showToast("error", "导出失败，请查看导出日志");
       } finally {
         window.cancelAnimationFrame(animationId);
         video.pause();
@@ -1282,7 +1276,7 @@ export default function ViralHookStudio() {
           onExportSelected={exportSelectedHooks}
         />
 
-        <AnalysisDashboard analysis={analysis} copyPack={copyPack} isAnalyzing={isAnalyzing} />
+        <AnalysisDashboard analysis={analysis} copyPack={copyPack} isAnalyzing={isAnalyzing} source={analysisSource} />
 
         <section className="grid gap-5 lg:grid-cols-[1fr_23rem]">
           <div className="rounded-lg border border-line bg-white/[0.04] p-4 text-sm text-white/62">
