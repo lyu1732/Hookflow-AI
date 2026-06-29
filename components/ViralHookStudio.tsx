@@ -133,10 +133,12 @@ const formatSize = (bytes: number) => {
 
 const getSupportedRecorder = () => {
   const candidates = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4;codecs=h264,aac",
+    "video/mp4",
     "video/webm;codecs=vp9,opus",
     "video/webm;codecs=vp8,opus",
-    "video/webm",
-    "video/mp4;codecs=h264,aac"
+    "video/webm"
   ];
 
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
@@ -762,10 +764,10 @@ export default function ViralHookStudio() {
 
       let scale = 1;
       let flip = false;
-      if (effect === "zoom") scale = 1.04 + Math.min(time / 1.5, 1) * 0.05;
-      if (effect === "pulse") scale = 1 + Math.sin(time * Math.PI * 3) * 0.018;
-      if (effect === "fast") scale = 1.035;
       if (isHookSegment) {
+        if (effect === "zoom") scale = 1.04 + Math.min(time / 1.5, 1) * 0.05;
+        if (effect === "pulse") scale = 1 + Math.sin(time * Math.PI * 3) * 0.018;
+        if (effect === "fast") scale = 1.035;
         scale = Math.max(scale, 1.1 + Math.sin(time * Math.PI * 4) * 0.025);
       }
 
@@ -934,6 +936,7 @@ export default function ViralHookStudio() {
       const video = document.createElement("video");
       const canvas = document.createElement("canvas");
       let animationId = 0;
+      let frameTimer = 0;
       let exportSourceUrl = "";
       let audioContext: AudioContext | null = null;
 
@@ -965,7 +968,7 @@ export default function ViralHookStudio() {
         const outputDuration = duration + hookDuration;
         const sourceWidth = video.videoWidth || 720;
         const sourceHeight = video.videoHeight || 1280;
-        const maxLongSide = 540;
+        const maxLongSide = duration <= 18 ? 720 : 540;
         const scale = Math.min(1, maxLongSide / Math.max(sourceWidth, sourceHeight));
         const width = Math.max(2, Math.round((sourceWidth * scale) / 2) * 2);
         const height = Math.max(2, Math.round((sourceHeight * scale) / 2) * 2);
@@ -975,8 +978,12 @@ export default function ViralHookStudio() {
         const context = canvas.getContext("2d", { alpha: false });
         if (!context) throw new Error("Canvas 初始化失败");
 
-        const exportFps = 24;
-        const canvasStream = canvas.captureStream(exportFps);
+        const exportFps = 30;
+        const frameInterval = 1000 / exportFps;
+        const canvasStream = canvas.captureStream(0);
+        const canvasTrack = canvasStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack & {
+          requestFrame?: () => void;
+        };
         try {
           const AudioContextClass =
             window.AudioContext ?? (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -997,7 +1004,7 @@ export default function ViralHookStudio() {
 
         const recorder = new MediaRecorder(canvasStream, {
           mimeType,
-          videoBitsPerSecond: 1_100_000
+          videoBitsPerSecond: maxLongSide >= 720 ? 2_500_000 : 1_600_000
         });
         const chunks: BlobPart[] = [];
 
@@ -1018,9 +1025,11 @@ export default function ViralHookStudio() {
         await seekVideo(video, hookStart);
         video.playbackRate = hook.type === "hook3" ? 1.25 : 1;
         drawFrame(context, video, width, height, mode, hook, true);
+        canvasTrack?.requestFrame?.();
         recorder.start(500);
         await video.play();
         appendLog(`导出参数：${width}x${height} / ${exportFps}fps / ${mimeType}`);
+        appendLog(mimeType.includes("mp4") ? "当前浏览器支持 MP4，将直接导出 MP4" : "当前浏览器不支持 MP4 录制，已自动回退 WebM");
         appendLog(`Hook 取材位置：原视频 ${hookStart.toFixed(1)} 秒附近`);
         appendLog(`重剪结构：前 ${hookDuration.toFixed(1)} 秒为重构 hook，随后从 0 秒接回完整原片`);
 
@@ -1029,6 +1038,7 @@ export default function ViralHookStudio() {
         let phase: "hook" | "main" = "hook";
         let switchedToMain = false;
         let mainStartedAt = 0;
+        let expectedFrameAt = performance.now();
         const render = async () => {
           if (!activeExportRef.current) return;
           const elapsed = (performance.now() - startedAt) / 1000;
@@ -1046,6 +1056,7 @@ export default function ViralHookStudio() {
           }
 
           drawFrame(context, video, width, height, mode, hook, isHookSegment);
+          canvasTrack?.requestFrame?.();
           const mainElapsed = phase === "hook" ? 0 : Math.min(duration, video.currentTime);
           const exportedElapsed = Math.min(elapsed, hookDuration) + mainElapsed;
           const percent = Math.min(98, Math.round((exportedElapsed / outputDuration) * 100));
@@ -1068,7 +1079,8 @@ export default function ViralHookStudio() {
             return;
           }
 
-          animationId = window.requestAnimationFrame(render);
+          expectedFrameAt += frameInterval;
+          frameTimer = window.setTimeout(render, Math.max(0, expectedFrameAt - performance.now()));
         };
 
         animationId = window.requestAnimationFrame(render);
@@ -1108,6 +1120,7 @@ export default function ViralHookStudio() {
         showToast("error", "导出失败，请查看导出日志");
       } finally {
         window.cancelAnimationFrame(animationId);
+        window.clearTimeout(frameTimer);
         video.pause();
         video.removeAttribute("src");
         video.load();
