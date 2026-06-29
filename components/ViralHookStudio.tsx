@@ -953,6 +953,14 @@ export default function ViralHookStudio() {
         video.volume = 1;
         video.playsInline = true;
         video.preload = "auto";
+        video.style.position = "fixed";
+        video.style.left = "-9999px";
+        video.style.top = "0";
+        video.style.width = "1px";
+        video.style.height = "1px";
+        video.style.opacity = "0";
+        video.style.pointerEvents = "none";
+        document.body.appendChild(video);
         exportSourceUrl = URL.createObjectURL(videoFile);
         video.src = exportSourceUrl;
         video.load();
@@ -984,10 +992,7 @@ export default function ViralHookStudio() {
 
         const exportFps = 30;
         const frameInterval = 1000 / exportFps;
-        const canvasStream = canvas.captureStream(0);
-        const canvasTrack = canvasStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack & {
-          requestFrame?: () => void;
-        };
+        const canvasStream = canvas.captureStream(exportFps);
         try {
           const AudioContextClass =
             window.AudioContext ?? (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -1029,7 +1034,6 @@ export default function ViralHookStudio() {
         await seekVideo(video, hookStart);
         video.playbackRate = hook.type === "hook3" ? 1.35 : 1;
         drawFrame(context, video, width, height, mode, hook, true);
-        canvasTrack?.requestFrame?.();
         recorder.start(500);
         await video.play();
         appendLog(`导出参数：${width}x${height} / ${exportFps}fps / ${mimeType}`);
@@ -1061,7 +1065,6 @@ export default function ViralHookStudio() {
           }
 
           drawFrame(context, video, width, height, mode, hook, isHookSegment);
-          canvasTrack?.requestFrame?.();
           const mainElapsed = phase === "hook" ? 0 : Math.min(duration, video.currentTime);
           const exportedElapsed = Math.min(elapsed, hookDuration) + mainElapsed;
           const percent = Math.min(98, Math.round((exportedElapsed / outputDuration) * 100));
@@ -1129,6 +1132,7 @@ export default function ViralHookStudio() {
         video.pause();
         video.removeAttribute("src");
         video.load();
+        video.remove();
         audioContext?.close().catch(() => undefined);
         if (exportSourceUrl) URL.revokeObjectURL(exportSourceUrl);
         activeExportRef.current = false;
