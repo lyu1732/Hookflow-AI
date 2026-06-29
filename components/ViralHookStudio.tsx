@@ -19,11 +19,9 @@ import {
   Gauge,
   Hash,
   LoaderCircle,
-  Play,
   Sparkles,
   Target,
   Upload,
-  Wand2,
   X,
   Zap
 } from "lucide-react";
@@ -31,13 +29,15 @@ import {
 type ExportMode = "watermark" | "rewarded";
 type ToastType = "success" | "error";
 
-type HookTemplate = {
-  id: "zoom" | "asmr" | "fast" | "reverse" | "subtitle";
-  name: string;
-  label: string;
+type HookVariant = {
+  type: "hook1" | "hook2" | "hook3";
+  displayName: string;
+  title: string;
   description: string;
+  tags: string[];
+  score: number;
   previewClass: string;
-  exportEffect: "zoom" | "pulse" | "fast" | "reverse" | "subtitle";
+  exportEffect: "pulse" | "zoom" | "fast";
 };
 
 type ExportResult = {
@@ -47,6 +47,7 @@ type ExportResult = {
   fileName: string;
   mimeType: string;
   duration: number;
+  hookTitle: string;
 };
 
 type Analysis = {
@@ -78,49 +79,45 @@ type FrameMetric = {
 type AnalyzeResponse = {
   analysis: Analysis;
   copyPack: CopyPack;
+  hooks?: Array<{
+    type: HookVariant["type"];
+    video_url: string;
+    description: string;
+    score?: number;
+  }>;
   source: "gemini" | "local-fallback";
 };
 
-const templates: HookTemplate[] = [
+const hookVariants: HookVariant[] = [
   {
-    id: "zoom",
-    name: "爆点前置",
-    label: "前 1 秒抓住注意力",
-    description: "轻微推近画面并强化对比，让开场更有冲击感。",
+    type: "hook1",
+    displayName: "Hook 1",
+    title: "高冲击开场版本",
+    description: "从素材中提取更强的声音与画面瞬间，重构前 3–5 秒。",
+    tags: ["Hook 1", "高对比", "强开场"],
+    score: 86,
+    previewClass: "preview-hook1",
+    exportEffect: "pulse"
+  },
+  {
+    type: "hook2",
+    displayName: "Hook 2",
+    title: "结果前置版本",
+    description: "先展示更有结果感的片段，再回到完整内容制造好奇心。",
+    tags: ["Hook 2", "结果前置", "悬念"],
+    score: 91,
     previewClass: "preview-zoom",
     exportEffect: "zoom"
   },
   {
-    id: "asmr",
-    name: "ASMR卡点",
-    label: "质感增强与轻节奏",
-    description: "增强细节和节奏感，适合美食、手作、开箱。",
-    previewClass: "preview-asmr",
-    exportEffect: "pulse"
-  },
-  {
-    id: "fast",
-    name: "快速开场",
-    label: "更快进入主题",
-    description: "用快节奏开头减少流失，适合教程和产品展示。",
+    type: "hook3",
+    displayName: "Hook 3",
+    title: "快节奏混剪版本",
+    description: "把视觉重点压缩进开头几秒，形成更明显的节奏变化。",
+    tags: ["Hook 3", "快节奏", "混剪"],
+    score: 83,
     previewClass: "preview-fast",
     exportEffect: "fast"
-  },
-  {
-    id: "reverse",
-    name: "悬念倒放",
-    label: "先给结果再反转",
-    description: "用反向视觉制造悬念，强化看完动机。",
-    previewClass: "preview-reverse",
-    exportEffect: "reverse"
-  },
-  {
-    id: "subtitle",
-    name: "爆款字幕",
-    label: "醒目标题引导停留",
-    description: "加入强提示字幕，让观众知道下一秒值得看。",
-    previewClass: "preview-subtitle",
-    exportEffect: "subtitle"
   }
 ];
 
@@ -265,7 +262,7 @@ const extractAnalysisFrames = async (url: string) => {
   return { frames, metrics, duration, aspectRatio };
 };
 
-const generateAnalysis = (file: File | null, template: HookTemplate): Analysis => {
+const generateAnalysis = (file: File | null): Analysis => {
   const name = file?.name.toLowerCase() ?? "";
   const isDance = /dance|kpop|舞|跳/.test(name);
   const isProduct = /product|shop|review|开箱|测评|产品/.test(name);
@@ -280,7 +277,7 @@ const generateAnalysis = (file: File | null, template: HookTemplate): Analysis =
       hookStrength: 82,
       engagementLift: "+12%",
       retentionLift: "+18%",
-      recommendedHook: template.id === "asmr" ? "ASMR卡点" : "快速开场"
+      recommendedHook: "Hook 3"
     };
   }
 
@@ -293,7 +290,7 @@ const generateAnalysis = (file: File | null, template: HookTemplate): Analysis =
       hookStrength: 79,
       engagementLift: "+10%",
       retentionLift: "+16%",
-      recommendedHook: "爆款字幕"
+      recommendedHook: "Hook 2"
     };
   }
 
@@ -306,7 +303,7 @@ const generateAnalysis = (file: File | null, template: HookTemplate): Analysis =
       hookStrength: 86,
       engagementLift: "+14%",
       retentionLift: "+21%",
-      recommendedHook: "ASMR卡点"
+      recommendedHook: "Hook 1"
     };
   }
 
@@ -318,7 +315,7 @@ const generateAnalysis = (file: File | null, template: HookTemplate): Analysis =
     hookStrength: 80,
     engagementLift: "+11%",
     retentionLift: "+17%",
-    recommendedHook: template.name
+    recommendedHook: "Hook 2"
   };
 };
 
@@ -357,58 +354,108 @@ const MetricCard = memo(function MetricCard({
   );
 });
 
-const TemplateSelector = memo(function TemplateSelector({
-  selectedId,
+const HookResultsDashboard = memo(function HookResultsDashboard({
+  videoUrl,
+  hooks,
+  selectedTypes,
   disabled,
-  onSelect
+  onToggle,
+  onExportOne,
+  onExportSelected
 }: {
-  selectedId: HookTemplate["id"];
+  videoUrl: string;
+  hooks: HookVariant[];
+  selectedTypes: HookVariant["type"][];
   disabled: boolean;
-  onSelect: (template: HookTemplate) => void;
+  onToggle: (type: HookVariant["type"]) => void;
+  onExportOne: (hook: HookVariant) => void;
+  onExportSelected: () => void;
 }) {
+  if (!videoUrl) return null;
+
   return (
-    <aside className="rounded-lg border border-line bg-panel/90 shadow-lift backdrop-blur">
-      <div className="border-b border-line px-4 py-3">
-        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-coral">
-          增长模板
-        </p>
-        <h2 className="mt-1 text-lg font-bold">选择爆款结构</h2>
+    <section className="rounded-lg border border-line bg-panel/90 shadow-lift backdrop-blur">
+      <div className="flex flex-col gap-3 border-b border-line px-4 py-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-coral">
+            Hook Results Dashboard
+          </p>
+          <h2 className="mt-1 text-xl font-black">生成结果</h2>
+        </div>
+        <button
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2.5 text-sm font-black text-ink transition hover:bg-cyan disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={onExportSelected}
+          disabled={disabled || selectedTypes.length === 0}
+        >
+          <Download size={17} />
+          导出选中版本
+        </button>
       </div>
-      <div className="studio-scrollbar grid max-h-[38rem] gap-3 overflow-auto p-4">
-        {templates.map((template, index) => {
-          const isActive = template.id === selectedId;
+      <div className="grid gap-4 p-4 lg:grid-cols-3">
+        {hooks.map((hook) => {
+          const checked = selectedTypes.includes(hook.type);
 
           return (
-            <button
-              key={template.id}
-              className={`rounded-lg border p-4 text-left transition ${
-                isActive
-                  ? "border-cyan bg-cyan/10 shadow-glow"
-                  : "border-line bg-white/[0.04] hover:border-white/28 hover:bg-white/[0.065]"
+            <article
+              key={hook.type}
+              className={`overflow-hidden rounded-lg border bg-white/[0.04] transition ${
+                checked ? "border-cyan shadow-glow" : "border-line"
               }`}
-              onClick={() => onSelect(template)}
-              disabled={disabled}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="grid h-7 w-7 place-items-center rounded-md bg-white text-xs font-black text-ink">
-                      {index + 1}
-                    </span>
-                    <h3 className="font-black">{template.name}</h3>
+              <div className={`relative aspect-[9/14] max-h-[24rem] overflow-hidden bg-black ${hook.previewClass}`}>
+                <video
+                  className="h-full w-full object-cover"
+                  src={videoUrl}
+                  muted
+                  playsInline
+                  preload="metadata"
+                />
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/60 to-transparent p-4">
+                  <div className="flex flex-wrap gap-2">
+                    {hook.tags.map((tag) => (
+                      <span key={tag} className="rounded-md bg-white/14 px-2 py-1 text-xs font-bold">
+                        {tag}
+                      </span>
+                    ))}
                   </div>
-                  <p className="mt-3 text-sm font-semibold text-white/82">
-                    {template.label}
-                  </p>
                 </div>
-                {isActive ? <Play size={18} className="text-cyan" /> : <Wand2 size={18} />}
               </div>
-              <p className="mt-3 text-sm leading-5 text-white/58">{template.description}</p>
-            </button>
+              <div className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan">
+                      {hook.displayName}
+                    </p>
+                    <h3 className="mt-1 font-black">{hook.title}</h3>
+                    <p className="mt-2 text-sm leading-5 text-white/58">{hook.description}</p>
+                  </div>
+                  <div className="rounded-md bg-cyan/10 px-2 py-1 text-sm font-black text-cyan">
+                    {hook.score}
+                  </div>
+                </div>
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-white/72">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggle(hook.type)}
+                    disabled={disabled}
+                  />
+                  选择这个版本
+                </label>
+                <button
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-line bg-white/[0.06] px-4 py-2.5 text-sm font-bold transition hover:border-cyan hover:bg-cyan/10 disabled:opacity-50"
+                  onClick={() => onExportOne(hook)}
+                  disabled={disabled}
+                >
+                  <Download size={16} />
+                  导出这个版本
+                </button>
+              </div>
+            </article>
           );
         })}
       </div>
-    </aside>
+    </section>
   );
 });
 
@@ -515,10 +562,10 @@ const AnalysisDashboard = memo(function AnalysisDashboard({
 export default function ViralHookStudio() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const activeExportRef = useRef(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<HookTemplate>(templates[0]);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [exportResults, setExportResults] = useState<ExportResult[]>([]);
   const [status, setStatus] = useState("上传一段素材，生成增长分析和轻量导出。");
   const [progress, setProgress] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
@@ -528,13 +575,11 @@ export default function ViralHookStudio() {
   const [adCount, setAdCount] = useState(15);
   const [toast, setToast] = useState<{ type: ToastType; message: string } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState<Analysis>(() => generateAnalysis(null, templates[0]));
-  const [copyPack, setCopyPack] = useState<CopyPack>(() => generateCopyPack(generateAnalysis(null, templates[0])));
-
-  const selectedIndex = useMemo(
-    () => templates.findIndex((template) => template.id === selectedTemplate.id) + 1,
-    [selectedTemplate]
-  );
+  const [analysis, setAnalysis] = useState<Analysis>(() => generateAnalysis(null));
+  const [copyPack, setCopyPack] = useState<CopyPack>(() => generateCopyPack(generateAnalysis(null)));
+  const [generatedHooks, setGeneratedHooks] = useState<HookVariant[]>([]);
+  const [selectedHookTypes, setSelectedHookTypes] = useState<HookVariant["type"][]>([]);
+  const [pendingExportHooks, setPendingExportHooks] = useState<HookVariant[]>([]);
 
   const appendLog = useCallback((message: string) => {
     const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -581,6 +626,9 @@ export default function ViralHookStudio() {
       setVideoFile(file);
       setVideoUrl(nextVideoUrl);
       setExportResult(null);
+      setExportResults([]);
+      setGeneratedHooks([]);
+      setSelectedHookTypes([]);
       setProgress(0);
       setExportLogs([]);
       setIsAnalyzing(true);
@@ -599,7 +647,7 @@ export default function ViralHookStudio() {
           signal: controller.signal,
           body: JSON.stringify({
             ...framePayload,
-            template: selectedTemplate.name
+            template: "multi-variant-generation"
           })
         });
         window.clearTimeout(timeout);
@@ -608,23 +656,36 @@ export default function ViralHookStudio() {
         const data = (await response.json()) as AnalyzeResponse;
         setAnalysis(data.analysis);
         setCopyPack(data.copyPack);
+        const hookMap = new Map(data.hooks?.map((hook) => [hook.type, hook]));
+        const nextHooks = hookVariants.map((hook) => {
+          const apiHook = hookMap.get(hook.type);
+          return {
+            ...hook,
+            description: apiHook?.description ?? hook.description,
+            score: apiHook?.score ?? hook.score
+          };
+        });
+        setGeneratedHooks(nextHooks);
+        setSelectedHookTypes(nextHooks.map((hook) => hook.type));
         setStatus(
           data.source === "gemini"
             ? "Gemini 已完成内容理解和增长建议。"
-            : "已使用本地视觉启发式完成增长分析。"
+            : "已生成 3 个 Hook 版本，请选择导出。"
         );
         appendLog(data.source === "gemini" ? "Gemini Vision 分析完成" : "本地 fallback 分析完成");
       } catch {
-        const fallbackAnalysis = generateAnalysis(null, selectedTemplate);
+        const fallbackAnalysis = generateAnalysis(null);
         setAnalysis(fallbackAnalysis);
         setCopyPack(generateCopyPack(fallbackAnalysis));
-        setStatus("AI 分析超时，已使用本地快速策略生成建议。");
+        setGeneratedHooks(hookVariants);
+        setSelectedHookTypes(hookVariants.map((hook) => hook.type));
+        setStatus("AI 分析超时，已生成 3 个本地 Hook 版本。");
         appendLog("AI 分析超时，使用客户端快速兜底");
       } finally {
         setIsAnalyzing(false);
       }
     },
-    [appendLog, exportResult?.url, selectedTemplate, showToast, videoUrl]
+    [appendLog, exportResult?.url, showToast, videoUrl]
   );
 
   const drawFrame = useCallback(
@@ -634,9 +695,10 @@ export default function ViralHookStudio() {
       width: number,
       height: number,
       mode: ExportMode,
+      hook: HookVariant,
       isHookSegment = false
     ) => {
-      const effect = selectedTemplate.exportEffect;
+      const effect = hook.exportEffect;
       const time = video.currentTime;
 
       context.save();
@@ -649,7 +711,6 @@ export default function ViralHookStudio() {
       if (effect === "zoom") scale = 1.04 + Math.min(time / 1.5, 1) * 0.05;
       if (effect === "pulse") scale = 1 + Math.sin(time * Math.PI * 3) * 0.018;
       if (effect === "fast") scale = 1.035;
-      if (effect === "reverse") flip = true;
       if (isHookSegment) {
         scale = Math.max(scale, 1.1 + Math.sin(time * Math.PI * 4) * 0.025);
       }
@@ -677,15 +738,6 @@ export default function ViralHookStudio() {
         context.drawImage(video, x, y, drawWidth, drawHeight);
       }
 
-      if (effect === "subtitle") {
-        context.fillStyle = "rgba(0,0,0,0.58)";
-        context.fillRect(width * 0.14, height * 0.1, width * 0.72, 72);
-        context.font = "800 42px Arial, Helvetica, sans-serif";
-        context.fillStyle = "white";
-        context.textAlign = "center";
-        context.fillText("先别划走", width / 2, height * 0.1 + 49);
-      }
-
       if (isHookSegment) {
         const gradient = context.createLinearGradient(0, 0, width, height);
         gradient.addColorStop(0, "rgba(255,67,101,0.26)");
@@ -702,7 +754,7 @@ export default function ViralHookStudio() {
         context.fillStyle = "#ffffff";
         context.font = "900 44px Arial, Helvetica, sans-serif";
         context.fillText(
-          effect === "subtitle" ? "先看结果" : effect === "pulse" ? "高能瞬间" : "别从开头看",
+          hook.displayName === "Hook 2" ? "先看结果" : hook.displayName === "Hook 1" ? "高能瞬间" : "别从开头看",
           width / 2,
           height - 52
         );
@@ -732,11 +784,11 @@ export default function ViralHookStudio() {
 
       context.restore();
     },
-    [selectedTemplate.exportEffect]
+    []
   );
 
   const runCanvasExport = useCallback(
-    async (mode: ExportMode) => {
+    async (mode: ExportMode, hook: HookVariant) => {
       if (!videoFile || !videoUrl || activeExportRef.current) {
         if (!videoFile) showToast("error", "请先上传视频");
         return;
@@ -753,7 +805,6 @@ export default function ViralHookStudio() {
       setIsExporting(true);
       setExportResult(null);
       setProgress(0);
-      setExportLogs([]);
 
       const video = document.createElement("video");
       const canvas = document.createElement("canvas");
@@ -762,6 +813,7 @@ export default function ViralHookStudio() {
       try {
         appendLog("使用 Canvas + MediaRecorder 轻量导出");
         appendLog("跳过 FFmpeg WASM 全量转码，优先保证秒级体验");
+        appendLog(`正在导出：${hook.displayName}`);
 
         video.src = videoUrl;
         video.muted = true;
@@ -771,7 +823,14 @@ export default function ViralHookStudio() {
 
         const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 8;
         const hookDuration = Math.min(5, Math.max(3, duration * 0.28));
-        const hookStart = duration > hookDuration + 1 ? Math.max(0, duration - hookDuration - 0.4) : 0;
+        const hookStart =
+          duration <= hookDuration + 1
+            ? 0
+            : hook.type === "hook2"
+              ? Math.max(0, duration - hookDuration - 0.4)
+              : hook.type === "hook1"
+                ? Math.max(0, duration * 0.55 - hookDuration / 2)
+                : Math.max(0, duration * 0.35 - hookDuration / 2);
         const outputDuration = duration + hookDuration;
         const sourceWidth = video.videoWidth || 720;
         const sourceHeight = video.videoHeight || 1280;
@@ -830,7 +889,7 @@ export default function ViralHookStudio() {
             video.play().catch(() => undefined);
           }
 
-          drawFrame(context, video, width, height, mode, isHookSegment);
+          drawFrame(context, video, width, height, mode, hook, isHookSegment);
           const mainElapsed = phase === "hook" ? 0 : video.currentTime;
           const percent = Math.min(98, Math.round(((Math.min(elapsed, hookDuration) + mainElapsed) / outputDuration) * 100));
           setProgress(percent);
@@ -854,12 +913,25 @@ export default function ViralHookStudio() {
           url,
           size: blob.size,
           mode,
-          fileName: `hookflow-${selectedTemplate.id}.${extension}`,
+          fileName: `hookflow-${hook.displayName.toLowerCase().replace(/\s+/g, "-")}.${extension}`,
           mimeType,
-          duration: outputDuration
+          duration: outputDuration,
+          hookTitle: hook.displayName
         });
+        setExportResults((current) => [
+          ...current,
+          {
+            url,
+            size: blob.size,
+            mode,
+            fileName: `hookflow-${hook.displayName.toLowerCase().replace(/\s+/g, "-")}.${extension}`,
+            mimeType,
+            duration: outputDuration,
+            hookTitle: hook.displayName
+          }
+        ]);
         setProgress(100);
-        setStatus(`导出成功：已生成 ${Math.ceil(hookDuration)} 秒新 hook，并保留完整原视频。文件大小 ${formatSize(blob.size)}。`);
+        setStatus(`${hook.displayName} 导出成功：已生成 ${Math.ceil(hookDuration)} 秒新 hook，并保留完整原视频。文件大小 ${formatSize(blob.size)}。`);
         appendLog(`导出完成：${formatSize(blob.size)}`);
         showToast("success", "导出成功");
       } catch (error) {
@@ -879,12 +951,23 @@ export default function ViralHookStudio() {
     [
       appendLog,
       drawFrame,
-      selectedTemplate.exportEffect,
-      selectedTemplate.id,
       showToast,
       videoFile,
       videoUrl
     ]
+  );
+
+  const exportPendingHooks = useCallback(
+    async (mode: ExportMode) => {
+      const queue = pendingExportHooks.length ? pendingExportHooks : generatedHooks.slice(0, 1);
+      setExportResults([]);
+      setExportLogs([]);
+      for (const hook of queue) {
+        await runCanvasExport(mode, hook);
+      }
+      setPendingExportHooks([]);
+    },
+    [generatedHooks, pendingExportHooks, runCanvasExport]
   );
 
   const startRewardedAd = useCallback(() => {
@@ -901,24 +984,39 @@ export default function ViralHookStudio() {
         window.setTimeout(() => {
           setIsAdPlaying(false);
           showToast("success", "广告观看完成，已解锁无水印导出");
-          runCanvasExport("rewarded");
+          exportPendingHooks("rewarded");
         }, 700);
       }
     }, 1000);
-  }, [runCanvasExport, showToast]);
+  }, [exportPendingHooks, showToast]);
 
-  const openExportModal = useCallback(() => {
+  const openExportModal = useCallback((hooks: HookVariant[]) => {
     if (!videoFile) {
       setStatus("请先上传视频。");
       showToast("error", "请先上传视频");
       return;
     }
+    if (!hooks.length) {
+      showToast("error", "请先选择至少一个 Hook 版本");
+      return;
+    }
+    setPendingExportHooks(hooks);
     setIsExportModalOpen(true);
   }, [showToast, videoFile]);
 
-  const handleTemplateSelect = useCallback((template: HookTemplate) => {
-    setSelectedTemplate(template);
+  const toggleHookSelection = useCallback((type: HookVariant["type"]) => {
+    setSelectedHookTypes((current) =>
+      current.includes(type) ? current.filter((item) => item !== type) : [...current, type]
+    );
   }, []);
+
+  const exportSelectedHooks = useCallback(() => {
+    openExportModal(generatedHooks.filter((hook) => selectedHookTypes.includes(hook.type)));
+  }, [generatedHooks, openExportModal, selectedHookTypes]);
+
+  const exportSingleHook = useCallback((hook: HookVariant) => {
+    openExportModal([hook]);
+  }, [openExportModal]);
 
   return (
     <main className="min-h-screen px-4 py-5 text-white sm:px-6 lg:px-8">
@@ -946,28 +1044,26 @@ export default function ViralHookStudio() {
           </div>
         </header>
 
-        <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_23rem]">
+        <section className="grid gap-5">
           <div className="rounded-lg border border-line bg-panel/90 shadow-lift backdrop-blur">
             <div className="flex flex-col gap-3 border-b border-line px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan">
                   创作者增长工作台
                 </p>
-                <h2 className="mt-1 text-lg font-bold">{selectedTemplate.name}</h2>
+                <h2 className="mt-1 text-lg font-bold">上传后自动生成多个 Hook 版本</h2>
               </div>
-              <button
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2.5 text-sm font-bold text-ink transition hover:bg-cyan disabled:cursor-not-allowed disabled:opacity-55"
-                onClick={openExportModal}
-                disabled={!videoFile || isExporting || isAdPlaying}
-              >
-                {isExporting ? <LoaderCircle className="animate-spin" size={17} /> : <Download size={17} />}
-                {isExporting ? "正在导出" : "导出增长版视频"}
-              </button>
+              {isExporting ? (
+                <div className="inline-flex items-center gap-2 rounded-md border border-line bg-white/[0.05] px-4 py-2.5 text-sm font-bold text-white/72">
+                  <LoaderCircle className="animate-spin" size={17} />
+                  正在导出
+                </div>
+              ) : null}
             </div>
 
             <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_14rem]">
               <div
-                className={`relative grid min-h-[26rem] overflow-hidden rounded-lg border border-line bg-black ${selectedTemplate.previewClass}`}
+                className="relative grid min-h-[26rem] overflow-hidden rounded-lg border border-line bg-black"
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => {
                   event.preventDefault();
@@ -985,11 +1081,6 @@ export default function ViralHookStudio() {
                       preload="auto"
                       onEnded={() => setStatus("视频已完整播放完毕。")}
                     />
-                    {selectedTemplate.id === "subtitle" ? (
-                      <div className="pointer-events-none absolute left-1/2 top-[12%] -translate-x-1/2 whitespace-nowrap rounded-md bg-black/55 px-5 py-2 text-center text-2xl font-black text-white sm:text-4xl">
-                        先别划走
-                      </div>
-                    ) : null}
                     <div className="pointer-events-none absolute bottom-4 right-4 rounded-md bg-black/50 px-3 py-2 text-xs font-semibold text-white/90">
                       Made by Hook AI
                     </div>
@@ -1046,39 +1137,45 @@ export default function ViralHookStudio() {
                   <p className="mt-3 min-h-10 text-sm leading-5 text-white/62">{status}</p>
                 </div>
 
-                {exportResult ? (
+                {exportResults.length ? (
                   <div className="rounded-lg border border-mint/40 bg-mint/10 p-4">
                     <div className="flex items-center gap-2 text-sm font-black text-mint">
                       <BadgeCheck size={17} />
-                      导出成功
+                      已生成下载
                     </div>
-                    <p className="mt-2 text-sm text-white/72">文件大小：{formatSize(exportResult.size)}</p>
-                    <p className="mt-1 text-xs text-white/50">
-                      {exportResult.mode === "watermark" ? "免费导出（带水印）" : "广告导出（无水印）"}
-                    </p>
-                    <p className="mt-1 text-xs text-white/50">
-                      格式：{exportResult.mimeType.includes("mp4") ? "MP4" : "WebM"}，时长约 {Math.ceil(exportResult.duration)} 秒
-                    </p>
-                    <a
-                      className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-coral px-4 py-3 text-sm font-black text-white transition hover:bg-coral/88"
-                      href={exportResult.url}
-                      download={exportResult.fileName}
-                    >
-                      <Download size={17} />
-                      下载视频
-                    </a>
+                    <div className="mt-3 space-y-3">
+                      {exportResults.map((result) => (
+                        <a
+                          key={result.url}
+                          className="flex items-center justify-between gap-3 rounded-md bg-black/20 px-3 py-2 text-sm transition hover:bg-black/32"
+                          href={result.url}
+                          download={result.fileName}
+                        >
+                          <span>
+                            <span className="block font-bold">{result.hookTitle}</span>
+                            <span className="text-xs text-white/52">{formatSize(result.size)} · {result.mimeType.includes("mp4") ? "MP4" : "WebM"}</span>
+                          </span>
+                          <Download size={16} />
+                        </a>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
               </aside>
             </div>
           </div>
 
-          <TemplateSelector
-            selectedId={selectedTemplate.id}
-            disabled={isExporting}
-            onSelect={handleTemplateSelect}
-          />
         </section>
+
+        <HookResultsDashboard
+          videoUrl={videoUrl}
+          hooks={generatedHooks}
+          selectedTypes={selectedHookTypes}
+          disabled={isExporting || isAdPlaying}
+          onToggle={toggleHookSelection}
+          onExportOne={exportSingleHook}
+          onExportSelected={exportSelectedHooks}
+        />
 
         <AnalysisDashboard analysis={analysis} copyPack={copyPack} isAnalyzing={isAnalyzing} />
 
@@ -1095,10 +1192,10 @@ export default function ViralHookStudio() {
           <footer className="grid gap-3 rounded-lg border border-line bg-white/[0.04] p-4 text-sm text-white/62">
             <div className="flex items-center gap-2">
               <Zap size={16} className="text-mint" />
-              模板 {selectedIndex} / {templates.length}
+              多版本 Hook 生成
             </div>
-            <div>当前架构：Canvas + MediaRecorder 轻量导出。</div>
-            <div>适合明日演示：快、稳、无需服务器处理。</div>
+            <div>当前架构：上传分析后生成 Hook 1 / Hook 2 / Hook 3。</div>
+            <div>用户看到结果后再选择一个或多个版本导出。</div>
           </footer>
         </section>
       </div>
@@ -1125,7 +1222,7 @@ export default function ViralHookStudio() {
             <div className="mt-5 grid gap-3 md:grid-cols-2">
               <button
                 className="rounded-lg border border-line bg-white/[0.045] p-5 text-left transition hover:border-cyan hover:bg-cyan/10 disabled:opacity-55"
-                onClick={() => runCanvasExport("watermark")}
+                onClick={() => exportPendingHooks("watermark")}
                 disabled={isExporting}
               >
                 <div className="flex items-center gap-2 text-lg font-black">

@@ -53,7 +53,7 @@ input {
   will-change: transform;
 }
 
-.preview-asmr video {
+.preview-hook1 video {
   filter: saturate(1.25) contrast(1.08);
 }
 

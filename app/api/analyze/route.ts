@@ -42,6 +42,7 @@ Generate:
 
 Return strict JSON only using this exact schema:
 {
+  "original": "uploaded video",
   "analysis": {
     "category": "string",
     "elements": ["string"],
@@ -57,7 +58,12 @@ Return strict JSON only using this exact schema:
     "captions": ["string", "string", "string"],
     "hashtags": ["#tag"],
     "publishTime": "19:00-21:00"
-  }
+  },
+  "hooks": [
+    { "type": "hook1", "video_url": "client-generated", "description": "variant 1", "score": 86 },
+    { "type": "hook2", "video_url": "client-generated", "description": "variant 2", "score": 91 },
+    { "type": "hook3", "video_url": "client-generated", "description": "variant 3", "score": 83 }
+  ]
 }`;
 
 const clampScore = (value: number) => Math.max(62, Math.min(94, Math.round(value)));
@@ -100,13 +106,13 @@ const localFallback = (payload: AnalyzeRequest) => {
       : "低调真实感 / 适合悬念式开场";
 
   const recommendedHook =
-    payload.template === "ASMR卡点" || warm
-      ? "ASMR卡点"
+    warm
+      ? "Hook 1"
       : detailHeavy
-        ? "爆款字幕"
+        ? "Hook 2"
         : short
-          ? "快速开场"
-          : "爆点前置";
+          ? "Hook 3"
+          : "Hook 2";
 
   const attentionScore = clampScore(68 + metric.saturation * 16 + metric.contrast * 20 + (vertical ? 5 : 0));
   const hookStrength = clampScore(66 + metric.edgeEnergy * 24 + (short ? 6 : 0) + (detailHeavy ? 5 : 0));
@@ -114,6 +120,7 @@ const localFallback = (payload: AnalyzeRequest) => {
   const engagementLift = `+${Math.round(8 + metric.saturation * 15 + (vertical ? 3 : 0))}%`;
 
   return {
+    original: "uploaded video",
     analysis: {
       category,
       elements: detailHeavy
@@ -136,12 +143,32 @@ const localFallback = (payload: AnalyzeRequest) => {
       ],
       captions: [
         "把最有信息量的画面提前，观众才有理由继续看。",
-        recommendedHook === "爆款字幕" ? "第一秒直接给结论，后面再补过程。" : "用节奏和反差把前3秒做得更有停留感。",
+        recommendedHook === "Hook 2" ? "第一秒直接给结果感，后面再补过程。" : "用节奏和反差把前3秒做得更有停留感。",
         "这条适合做短标题强提示，再配合评论区引导互动。"
       ],
       hashtags: vivid ? ["#viral", "#creator", "#短视频增长", "#节奏感", "#hook"] : ["#creator", "#内容运营", "#viral", "#hook", "#增长"],
       publishTime: vertical ? "19:00-21:00" : "12:00-13:30"
     },
+    hooks: [
+      {
+        type: "hook1",
+        video_url: "client-generated",
+        description: "Hook 1：强化声音、质感和第一秒冲击，适合制造强停留。",
+        score: clampScore(hookStrength + 2)
+      },
+      {
+        type: "hook2",
+        video_url: "client-generated",
+        description: "Hook 2：将更接近结果/峰值的片段前置，制造结果先行的好奇心。",
+        score: clampScore(attentionScore + 5)
+      },
+      {
+        type: "hook3",
+        video_url: "client-generated",
+        description: "Hook 3：用更快节奏的开场包装视觉重点，形成明显差异。",
+        score: clampScore((attentionScore + hookStrength) / 2)
+      }
+    ],
     source: "local-fallback"
   };
 };
@@ -206,7 +233,13 @@ export async function POST(request: Request) {
 
     const parsed = parseGeminiJson(text);
     if (!parsed?.analysis || !parsed?.copyPack) throw new Error("Gemini returned invalid schema");
-    return NextResponse.json({ ...parsed, source: "gemini" });
+    const fallbackData = localFallback(payload);
+    return NextResponse.json({
+      ...parsed,
+      original: parsed.original ?? "uploaded video",
+      hooks: Array.isArray(parsed.hooks) && parsed.hooks.length >= 3 ? parsed.hooks : fallbackData.hooks,
+      source: "gemini"
+    });
   } catch {
     return fallback();
   }
