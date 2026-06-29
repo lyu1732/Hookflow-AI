@@ -633,7 +633,8 @@ export default function ViralHookStudio() {
       video: HTMLVideoElement,
       width: number,
       height: number,
-      mode: ExportMode
+      mode: ExportMode,
+      isHookSegment = false
     ) => {
       const effect = selectedTemplate.exportEffect;
       const time = video.currentTime;
@@ -649,6 +650,9 @@ export default function ViralHookStudio() {
       if (effect === "pulse") scale = 1 + Math.sin(time * Math.PI * 3) * 0.018;
       if (effect === "fast") scale = 1.035;
       if (effect === "reverse") flip = true;
+      if (isHookSegment) {
+        scale = Math.max(scale, 1.1 + Math.sin(time * Math.PI * 4) * 0.025);
+      }
 
       const videoRatio = video.videoWidth / video.videoHeight;
       const canvasRatio = width / height;
@@ -680,6 +684,35 @@ export default function ViralHookStudio() {
         context.fillStyle = "white";
         context.textAlign = "center";
         context.fillText("先别划走", width / 2, height * 0.1 + 49);
+      }
+
+      if (isHookSegment) {
+        const gradient = context.createLinearGradient(0, 0, width, height);
+        gradient.addColorStop(0, "rgba(255,67,101,0.26)");
+        gradient.addColorStop(0.55, "rgba(0,0,0,0)");
+        gradient.addColorStop(1, "rgba(37,244,238,0.2)");
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, width, height);
+
+        context.fillStyle = "rgba(0,0,0,0.72)";
+        context.fillRect(0, 0, width, 74);
+        context.fillRect(0, height - 96, width, 96);
+
+        context.textAlign = "center";
+        context.fillStyle = "#ffffff";
+        context.font = "900 44px Arial, Helvetica, sans-serif";
+        context.fillText(
+          effect === "subtitle" ? "先看结果" : effect === "pulse" ? "高能瞬间" : "别从开头看",
+          width / 2,
+          height - 52
+        );
+        context.font = "700 22px Arial, Helvetica, sans-serif";
+        context.fillStyle = "rgba(37,244,238,0.96)";
+        context.fillText("NEW HOOK 0-5S", width / 2, 48);
+
+        context.strokeStyle = time % 0.35 < 0.18 ? "rgba(255,67,101,0.92)" : "rgba(37,244,238,0.88)";
+        context.lineWidth = 8;
+        context.strokeRect(10, 10, width - 20, height - 20);
       }
 
       if (mode === "watermark") {
@@ -737,6 +770,9 @@ export default function ViralHookStudio() {
         await waitForVideoReady(video);
 
         const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 8;
+        const hookDuration = Math.min(5, Math.max(3, duration * 0.28));
+        const hookStart = duration > hookDuration + 1 ? Math.max(0, duration - hookDuration - 0.4) : 0;
+        const outputDuration = duration + hookDuration;
         const sourceWidth = video.videoWidth || 720;
         const sourceHeight = video.videoHeight || 1280;
         const maxLongSide = 720;
@@ -766,29 +802,41 @@ export default function ViralHookStudio() {
           recorder.onerror = () => reject(new Error("浏览器录制失败"));
           recorder.onstop = () => {
             const blob = new Blob(chunks, { type: mimeType });
-            const minimumExpectedSize = Math.min(200_000, Math.max(20_000, duration * 5_000));
+            const minimumExpectedSize = Math.min(240_000, Math.max(28_000, outputDuration * 5_000));
             if (blob.size <= minimumExpectedSize) reject(new Error("导出文件过小，录制未完整完成"));
             else resolve(blob);
           };
         });
 
-        video.currentTime = 0;
+        video.currentTime = hookStart;
         await video.play();
         recorder.start(250);
         appendLog(`导出参数：${width}x${height} / 30fps / ${mimeType}`);
-        appendLog(`完整视频导出：约 ${Math.ceil(duration)} 秒`);
+        appendLog(`重剪结构：先插入 ${hookDuration.toFixed(1)} 秒高冲击 hook，再接完整原片`);
 
         const startedAt = performance.now();
+        let phase: "hook" | "main" = "hook";
+        let switchedToMain = false;
         const render = () => {
           if (!activeExportRef.current) return;
           const elapsed = (performance.now() - startedAt) / 1000;
+          const isHookSegment = phase === "hook";
 
-          drawFrame(context, video, width, height, mode);
-          const percent = Math.min(98, Math.round((video.currentTime / duration) * 100));
+          if (phase === "hook" && elapsed >= hookDuration && !switchedToMain) {
+            switchedToMain = true;
+            phase = "main";
+            video.pause();
+            video.currentTime = 0;
+            video.play().catch(() => undefined);
+          }
+
+          drawFrame(context, video, width, height, mode, isHookSegment);
+          const mainElapsed = phase === "hook" ? 0 : video.currentTime;
+          const percent = Math.min(98, Math.round(((Math.min(elapsed, hookDuration) + mainElapsed) / outputDuration) * 100));
           setProgress(percent);
-          setStatus(`正在轻量导出：${percent}%`);
+          setStatus(phase === "hook" ? `正在生成高冲击开场：${percent}%` : `正在导出完整视频：${percent}%`);
 
-          if (video.ended || video.currentTime >= duration - 0.05 || elapsed >= duration + 1.5) {
+          if (phase === "main" && (video.ended || video.currentTime >= duration - 0.05 || elapsed >= outputDuration + 1.5)) {
             recorder.stop();
             video.pause();
             return;
@@ -808,10 +856,10 @@ export default function ViralHookStudio() {
           mode,
           fileName: `hookflow-${selectedTemplate.id}.${extension}`,
           mimeType,
-          duration
+          duration: outputDuration
         });
         setProgress(100);
-        setStatus(`导出成功，文件大小 ${formatSize(blob.size)}，耗时约 ${Math.ceil(duration)} 秒。`);
+        setStatus(`导出成功：已生成 ${Math.ceil(hookDuration)} 秒新 hook，并保留完整原视频。文件大小 ${formatSize(blob.size)}。`);
         appendLog(`导出完成：${formatSize(blob.size)}`);
         showToast("success", "导出成功");
       } catch (error) {
